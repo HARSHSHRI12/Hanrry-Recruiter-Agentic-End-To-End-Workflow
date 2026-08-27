@@ -474,6 +474,11 @@ if __name__ == "__main__":
     # Run agent worker in MAIN thread
     log.info("Starting Hanrry agent worker in main thread...")
     try:
+        # Python 3.10+ does not auto-create an event loop in the main thread.
+        # WorkerJob (and uvloop) require one to exist before calling job.start().
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
         options = Options(
             agent_id="MyTelephonyAgent",  # Must EXACTLY match Routing Rule Agent ID
             register=True,
