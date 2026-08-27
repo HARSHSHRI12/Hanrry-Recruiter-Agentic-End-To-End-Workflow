@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+.eggs/
+
+# Virtual env
+env/
+venv/
+.venv/
+env_win/
+
+# Environment secrets
+.env
+
+# Database
+*.db
+*.sqlite3
+
+# Uploads & Reports (runtime generated)
+uploads/
+reports/
+
+# Logs
+*.log
+logs/
+
+# IDE
+.vscode/
+.idea/
+*.suo
+*.user
+
+# OS
+.DS_Store
+Thumbs.db
+
+# pytest
+.pytest_cache/
+.coverage
+htmlcov/
