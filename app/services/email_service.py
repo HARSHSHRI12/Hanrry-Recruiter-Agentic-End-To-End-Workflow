@@ -18,12 +18,14 @@ from app.core.exceptions import EmailSendError
 log = get_logger(__name__)
 
 
-def _build_smtp_connection() -> smtplib.SMTP:
-    """Create and return an authenticated SMTP connection."""
+def _build_smtp_connection():
+    """Create and return an authenticated SMTP connection.
+    Uses SSL on port 465 (works on cloud platforms like Render that block port 587).
+    """
     try:
-        smtp = smtplib.SMTP(settings.SMTP_HOST, settings.SMTP_PORT)
-        smtp.ehlo()
-        smtp.starttls()
+        import ssl
+        context = ssl.create_default_context()
+        smtp = smtplib.SMTP_SSL(settings.SMTP_HOST, 465, context=context)
         smtp.login(settings.SMTP_USER, settings.SMTP_PASSWORD)
         return smtp
     except Exception as e:
