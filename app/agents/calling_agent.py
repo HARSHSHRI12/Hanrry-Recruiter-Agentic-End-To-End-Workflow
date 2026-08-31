@@ -375,7 +375,7 @@ if __name__ == "__main__":
             agent_id="MyTelephonyAgent",  # Must EXACTLY match Routing Rule Agent ID
             register=True,
             max_processes=1,  # Set to 1 to avoid Out Of Memory (512MB limit on Render)
-            num_idle_processes=0,  # Do not spawn idle workers (saves RAM)
+            num_idle_processes=1,  # MUST BE 1. If 0, VideoSDK instantly rejects calls!
             initialize_timeout=60.0,  # Prevent 10s timeout on Render's 0.1 CPU
             executor_type=ExecutorType.THREAD,  # Use threads instead of full process forks
             host="localhost",
