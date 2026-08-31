@@ -298,8 +298,9 @@ async def _initiate_videosdk_call(
     """
     import httpx
 
+    # 8082 is the hardcoded port where calling_agent.py runs its internal FastAPI server
     agent_url = (
-        f"http://{settings.VIDEOSDK_AGENT_HOST}:{settings.VIDEOSDK_AGENT_PORT}/trigger-call"
+        f"http://{settings.VIDEOSDK_AGENT_HOST}:8082/trigger-call"
     )
     payload = {
         "phone": phone,
