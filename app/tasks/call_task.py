@@ -293,34 +293,67 @@ async def _initiate_videosdk_call(
     session_id: str,
 ):
     """
-    Trigger the VideoSDK telephony agent to call the candidate.
-    This sends a request to the VideoSDK agent worker running on VIDEOSDK_AGENT_PORT.
+    Trigger an outbound SIP call via VideoSDK API directly.
+    This avoids the need to talk to the calling_agent's local HTTP server,
+    which may not always be reachable.
+    VideoSDK will route the connected call to our registered WorkerJob agent.
     """
     import httpx
+    import sys
 
-    # 8082 is the hardcoded port where calling_agent.py runs its internal FastAPI server
-    agent_url = (
-        f"http://{settings.VIDEOSDK_AGENT_HOST}:8082/trigger-call"
-    )
+    VIDEOSDK_SIP_CALL_URL = "https://api.videosdk.live/v2/sip/call"
+    routing_rule_id = settings.VIDEOSDK_ROUTING_RULE_ID
+
+    if not routing_rule_id:
+        log.error("❌ VIDEOSDK_ROUTING_RULE_ID not set — cannot make outbound call!")
+        return
+
+    # Get auth token
+    auth_token = settings.VIDEOSDK_AUTH_TOKEN
+    try:
+        project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        if project_root not in sys.path:
+            sys.path.insert(0, project_root)
+        from app.core.videosdk_token import get_videosdk_token
+        auth_token = get_videosdk_token()
+    except Exception as e:
+        log.warning(f"Token generator failed ({e}), using env token")
+
+    if not auth_token:
+        log.error("❌ No VideoSDK auth token available")
+        return
+
     payload = {
-        "phone": phone,
-        "candidate_name": candidate_name,
-        "job_title": job_title,
-        "company": company,
-        "jd_summary": jd_text[:1500],
-        "caller_id": caller_id,
-        "session_id": session_id,
-        "auth_token": settings.VIDEOSDK_AUTH_TOKEN,
+        "sipCallFrom":   caller_id or "",
+        "sipCallTo":     phone,
+        "routingRuleId": routing_rule_id,
+        "agentMetadata": {"session_id": session_id},
     }
+
+    log.info(f"📡 Calling VideoSDK SIP API directly...")
+    log.info(f"   sipCallFrom:   {caller_id}")
+    log.info(f"   sipCallTo:     {phone}")
+    log.info(f"   routingRuleId: {routing_rule_id}")
 
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(agent_url, json=payload)
+            resp = await client.post(
+                VIDEOSDK_SIP_CALL_URL,
+                json=payload,
+                headers={
+                    "Authorization": auth_token,
+                    "Content-Type":  "application/json",
+                },
+            )
+            log.info(f"   SIP API response: {resp.status_code}")
+            if resp.status_code != 200:
+                log.error(f"   SIP API error: {resp.text}")
             resp.raise_for_status()
-            log.info(f"✅ VideoSDK call triggered: {resp.json()}")
+            result = resp.json()
+            log.info(f"✅ VideoSDK SIP call initiated: {result}")
     except Exception as e:
         log.error(f"❌ Failed to trigger VideoSDK call: {e}")
-        # Don't raise – the job will still be marked and we'll capture any transcript
+        # Don't raise – transcript polling will handle timeout gracefully
 
 
 async def _poll_for_transcript(db, session_id: str, timeout_seconds: int = 1200) -> str:

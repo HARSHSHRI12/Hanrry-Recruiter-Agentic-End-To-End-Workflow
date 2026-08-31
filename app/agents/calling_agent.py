@@ -426,7 +426,7 @@ if __name__ == "__main__":
         VideoSDK calls this when an incoming/routed call is dispatched to
         this agent. We look up the session context and start the interview.
         """
-        # Try to get session_id from room metadata or use most recent pending
+        # Try to get session_id from room metadata
         session_id = None
         try:
             meta = getattr(context, "metadata", {}) or {}
@@ -439,7 +439,44 @@ if __name__ == "__main__":
             session_id = list(_pending_sessions.keys())[-1]
             log.warning(f"No session_id in context metadata, using fallback: {session_id}")
 
-        params = _pending_sessions.get(session_id, {})
+        params = _pending_sessions.pop(session_id, {})
+        
+        # If params not found in memory cache, fetch from DB
+        if not params and session_id:
+            try:
+                import sys
+                project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                if project_root not in sys.path:
+                    sys.path.insert(0, project_root)
+                from app.db.database import AsyncSessionLocal
+                from app.db import crud
+
+                async with AsyncSessionLocal() as db:
+                    db_session = await crud.get_interview_session(db, session_id)
+                    if db_session:
+                        candidate = await crud.get_candidate(db, db_session.candidate_id)
+                        if candidate:
+                            params["candidate_name"] = candidate.name
+                            
+                            # Resolve job data
+                            resolved_job_title = getattr(db_session, "job_title", None)
+                            resolved_company = getattr(db_session, "company", None)
+                            resolved_jd_text = getattr(db_session, "jd_text", None)
+                            resolved_job_id = getattr(db_session, "job_id", None) or getattr(candidate, "job_id", None)
+                            
+                            if resolved_job_id and not (resolved_job_title and resolved_jd_text):
+                                job = await crud.get_job(db, resolved_job_id)
+                                if job:
+                                    resolved_job_title = resolved_job_title or job.title
+                                    resolved_company = resolved_company or job.company
+                                    resolved_jd_text = resolved_jd_text or job.jd_text
+
+                            params["job_title"] = resolved_job_title or "Software Engineer"
+                            params["company"] = resolved_company or "our company"
+                            params["jd_summary"] = resolved_jd_text or ""
+            except Exception as e:
+                log.error(f"Failed to fetch session params from DB: {e}")
+
         log.info(f"Agent session starting for session_id={session_id}, params={list(params.keys())}")
 
         await run_interview_session(
@@ -450,9 +487,6 @@ if __name__ == "__main__":
             jd_summary=params.get("jd_summary", ""),
             session_id=session_id or "",
         )
-
-        # Clean up
-        _pending_sessions.pop(session_id, None)
 
     def make_context() -> JobContext:
         return JobContext(room_options=RoomOptions())
