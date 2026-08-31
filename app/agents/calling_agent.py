@@ -375,7 +375,7 @@ if __name__ == "__main__":
             agent_id="MyTelephonyAgent",  # Must EXACTLY match Routing Rule Agent ID
             register=True,
             max_processes=1,  # Set to 1 to avoid Out Of Memory (512MB limit on Render)
-            target_idle_processes=0,  # Do not spawn idle background processes (saves RAM)
+            target_idle_processes=1,  # Keep 1 idle worker ready to accept calls (threads are lightweight)
             executor_type=ExecutorType.THREAD,  # Use threads instead of full process forks
             host="localhost",
             port=8081,
