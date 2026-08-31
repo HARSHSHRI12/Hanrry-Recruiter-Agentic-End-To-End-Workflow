@@ -29,7 +29,8 @@ class Settings(BaseSettings):
     # ── Database ─────────────────────────────────────────
     DATABASE_URL: str = "sqlite:///./hanrry.db"
 
-    # ── Email (SMTP) ──────────────────────────────────────
+    # ── Email (Resend / SMTP) ─────────────────────────────
+    RESEND_API_KEY: Optional[str] = None
     SMTP_HOST: str = "smtp.gmail.com"
     SMTP_PORT: int = 587
     SMTP_USER: str = ""

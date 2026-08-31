@@ -6,6 +6,8 @@ Handles:
 """
 import smtplib
 import os
+import base64
+import httpx
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from email.mime.application import MIMEApplication
@@ -18,10 +20,39 @@ from app.core.exceptions import EmailSendError
 log = get_logger(__name__)
 
 
+def _send_via_resend(to_email: str, subject: str, html_content: str, pdf_path: str = None):
+    """Send email using Resend HTTP API (bypasses Render SMTP blocking)."""
+    url = "https://api.resend.com/emails"
+    headers = {
+        "Authorization": f"Bearer {settings.RESEND_API_KEY}",
+        "Content-Type": "application/json",
+    }
+    
+    data = {
+        "from": f"Hanrry AI <{settings.SMTP_USER}>",
+        "to": [to_email],
+        "subject": subject,
+        "html": html_content,
+    }
+
+    if pdf_path and os.path.exists(pdf_path):
+        with open(pdf_path, "rb") as f:
+            pdf_b64 = base64.b64encode(f.read()).decode("utf-8")
+        data["attachments"] = [
+            {
+                "filename": os.path.basename(pdf_path),
+                "content": pdf_b64,
+            }
+        ]
+    
+    resp = httpx.post(url, headers=headers, json=data, timeout=15.0)
+    if resp.status_code >= 400:
+        raise EmailSendError(f"Resend API Error {resp.status_code}: {resp.text}")
+    log.info(f"Email sent via Resend API → {to_email}")
+
+
 def _build_smtp_connection():
-    """Create and return an authenticated SMTP connection.
-    Uses SSL on port 465 (works on cloud platforms like Render that block port 587).
-    """
+    """Create and return an authenticated SMTP connection."""
     try:
         import ssl
         context = ssl.create_default_context()
@@ -32,12 +63,12 @@ def _build_smtp_connection():
         raise EmailSendError(f"SMTP connection failed: {e}")
 
 
-def _send(msg: MIMEMultipart, to_email: str):
-    """Send a pre-built MIME message."""
+def _send_via_smtp(msg: MIMEMultipart, to_email: str):
+    """Send a pre-built MIME message via classic SMTP."""
     smtp = _build_smtp_connection()
     try:
         smtp.sendmail(settings.SMTP_USER, to_email, msg.as_string())
-        log.info(f"Email sent → {to_email}")
+        log.info(f"Email sent via SMTP → {to_email}")
     finally:
         smtp.quit()
 
@@ -120,21 +151,24 @@ def send_schedule_email(
     schedule_link: str,
 ):
     """Send interview scheduling invitation to a candidate."""
-    msg = MIMEMultipart("alternative")
-    msg["Subject"] = SCHEDULE_SUBJECT.format(company=company, job_title=job_title)
-    msg["From"] = f"Hanrry AI Recruiter <{settings.SMTP_USER}>"
-    msg["To"] = to_email
-
+    subject = SCHEDULE_SUBJECT.format(company=company, job_title=job_title)
     html = SCHEDULE_HTML.format(
         candidate_name=candidate_name or "Candidate",
         job_title=job_title,
         company=company,
         schedule_link=schedule_link,
     )
-    msg.attach(MIMEText(html, "html"))
 
     try:
-        _send(msg, to_email)
+        if settings.RESEND_API_KEY:
+            _send_via_resend(to_email, subject, html)
+        else:
+            msg = MIMEMultipart("alternative")
+            msg["Subject"] = subject
+            msg["From"] = f"Hanrry AI Recruiter <{settings.SMTP_USER}>"
+            msg["To"] = to_email
+            msg.attach(MIMEText(html, "html"))
+            _send_via_smtp(msg, to_email)
     except EmailSendError:
         raise
     except Exception as e:
@@ -223,13 +257,7 @@ def send_report_email(
     pdf_path: str,
 ):
     """Send interview report (with PDF attachment) to the recruiter."""
-    msg = MIMEMultipart("mixed")
-    msg["Subject"] = REPORT_SUBJECT.format(
-        candidate_name=candidate_name, job_title=job_title
-    )
-    msg["From"] = f"Hanrry AI <{settings.SMTP_USER}>"
-    msg["To"] = settings.RECRUITER_EMAIL
-
+    subject = REPORT_SUBJECT.format(candidate_name=candidate_name, job_title=job_title)
     html = REPORT_HTML.format(
         candidate_name=candidate_name or "N/A",
         candidate_email=candidate_email or "N/A",
@@ -240,21 +268,29 @@ def send_report_email(
         recommendation=recommendation,
         summary=summary,
     )
-    msg.attach(MIMEText(html, "html"))
-
-    # Attach PDF report
-    if pdf_path and os.path.exists(pdf_path):
-        with open(pdf_path, "rb") as f:
-            pdf_attachment = MIMEApplication(f.read(), _subtype="pdf")
-            pdf_attachment.add_header(
-                "Content-Disposition",
-                "attachment",
-                filename=os.path.basename(pdf_path),
-            )
-            msg.attach(pdf_attachment)
 
     try:
-        _send(msg, settings.RECRUITER_EMAIL)
+        if settings.RESEND_API_KEY:
+            _send_via_resend(settings.RECRUITER_EMAIL, subject, html, pdf_path)
+        else:
+            msg = MIMEMultipart("mixed")
+            msg["Subject"] = subject
+            msg["From"] = f"Hanrry AI <{settings.SMTP_USER}>"
+            msg["To"] = settings.RECRUITER_EMAIL
+            msg.attach(MIMEText(html, "html"))
+            
+            # Attach PDF report
+            if pdf_path and os.path.exists(pdf_path):
+                with open(pdf_path, "rb") as f:
+                    pdf_attachment = MIMEApplication(f.read(), _subtype="pdf")
+                    pdf_attachment.add_header(
+                        "Content-Disposition",
+                        "attachment",
+                        filename=os.path.basename(pdf_path),
+                    )
+                    msg.attach(pdf_attachment)
+
+            _send_via_smtp(msg, settings.RECRUITER_EMAIL)
     except EmailSendError:
         raise
     except Exception as e:
