@@ -474,15 +474,20 @@ if __name__ == "__main__":
     # Run agent worker in MAIN thread
     log.info("Starting Hanrry agent worker in main thread...")
     try:
-        # Python 3.10+ does not auto-create an event loop in the main thread.
-        # WorkerJob (and uvloop) require one to exist before calling job.start().
+        # Properly initialize uvloop if available (videosdk uses it)
+        try:
+            import uvloop
+            asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
+        except ImportError:
+            pass
+            
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
 
         options = Options(
             agent_id="MyTelephonyAgent",  # Must EXACTLY match Routing Rule Agent ID
             register=True,
-            max_processes=10,
+            max_processes=1,  # Set to 1 to avoid Out Of Memory (512MB limit on Render)
             host="localhost",
             port=8081,
         )
