@@ -357,32 +357,37 @@ if __name__ == "__main__":
     def make_context() -> JobContext:
         return JobContext(room_options=RoomOptions())
 
-    # ── Run Servers ───────────────────────────────────────────────────────────
-    # Run agent worker in MAIN thread
-    log.info("Starting Hanrry agent worker in main thread...")
-    try:
-        # Properly initialize uvloop if available (videosdk uses it)
+    # ── Worker Startup Function (Called from main.py) ────────────────────────
+    def _run_worker():
+        log.info("Starting Hanrry agent worker thread...")
         try:
-            import uvloop
-            asyncio.set_event_loop_policy(uvloop.EventLoopPolicy())
-        except ImportError:
-            pass
-            
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
+            # Note: uvloop setup is not strictly needed here since we're in a thread
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
 
-        options = Options(
-            agent_id="MyTelephonyAgent",  # Must EXACTLY match Routing Rule Agent ID
-            register=True,
-            max_processes=1,  # Set to 1 to avoid Out Of Memory (512MB limit on Render)
-            num_idle_processes=1,  # MUST BE 1. If 0, VideoSDK instantly rejects calls!
-            initialize_timeout=60.0,  # Prevent 10s timeout on Render's 0.1 CPU
-            executor_type=ExecutorType.THREAD,  # Use threads instead of full process forks
-            host="localhost",
-            port=8081,
-        )
-        job = WorkerJob(entrypoint=_session_entry, jobctx=make_context, options=options)
-        job.start()
-    except Exception:
-        traceback.print_exc()
+            options = Options(
+                agent_id="MyTelephonyAgent",  # Must EXACTLY match Routing Rule Agent ID
+                register=True,
+                max_processes=1,  # Set to 1 to avoid Out Of Memory (512MB limit on Render)
+                num_idle_processes=1,  # MUST BE 1. If 0, VideoSDK instantly rejects calls!
+                initialize_timeout=60.0,  # Prevent 10s timeout on Render's 0.1 CPU
+                executor_type=ExecutorType.THREAD,  # Use threads instead of full process forks
+                host="localhost",
+                port=8081,
+            )
+            job = WorkerJob(entrypoint=_session_entry, jobctx=make_context, options=options)
+            job.start()
+        except Exception:
+            traceback.print_exc()
 
+    def start_agent_worker():
+        import threading
+        t = threading.Thread(target=_run_worker, daemon=True)
+        t.start()
+        log.info("Agent worker thread launched.")
+
+if __name__ == "__main__":
+    start_agent_worker()
+    import time
+    while True:
+        time.sleep(1)

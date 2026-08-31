@@ -40,6 +40,14 @@ async def lifespan(app: FastAPI):
     start_scheduler()
     log.info(" Scheduler started.")
 
+    # Start VideoSDK Agent Worker in Background Thread
+    try:
+        from app.agents.calling_agent import start_agent_worker
+        start_agent_worker()
+        log.info(" Embedded VideoSDK Worker started.")
+    except Exception as e:
+        log.error(f" Failed to start embedded worker: {e}")
+
     yield  # App is running
 
     # Graceful shutdown
