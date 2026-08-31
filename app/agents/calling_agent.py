@@ -281,144 +281,10 @@ if __name__ == "__main__":
     """
     Run as a persistent VideoSDK agent worker.
     - Registers this process with VideoSDK as "HanrryInterviewAgent"
-    - Exposes POST /trigger-call to receive interview requests from call_task.py
-    - On trigger-call: dials candidate's phone via VideoSDK SIP API, then agent
-      joins the room when VideoSDK routes the connected call here.
+    - VideoSDK routes the connected call here.
     """
-    from fastapi import FastAPI
-    from pydantic import BaseModel
-    import uvicorn
-    import threading
-    import httpx
-
-    class TriggerCallRequest(BaseModel):
-        phone: str
-        candidate_name: str
-        job_title: str
-        company: str
-        caller_id: str
-        jd_summary: str
-        session_id: str
-        auth_token: str
-
-    http_app = FastAPI(title="Hanrry Calling Agent")
-
     # ── Context store: session_id -> call params (for agent entrypoint) ────────
     _pending_sessions: dict = {}
-
-    async def _make_outbound_sip_call(phone: str, caller_id: str, session_id: str) -> dict:
-        """
-        Call VideoSDK SIP API to dial candidate's phone number.
-        Uses fresh auto-generated token (never expired).
-        """
-        import sys
-        routing_rule_id = os.getenv("VIDEOSDK_ROUTING_RULE_ID", "")
-
-        if not routing_rule_id:
-            log.error("VIDEOSDK_ROUTING_RULE_ID not set in .env — cannot make outbound call!")
-            raise ValueError("VIDEOSDK_ROUTING_RULE_ID missing from .env")
-
-        # Get fresh token — auto-generates from API_KEY+SECRET or falls back to env token
-        try:
-            # Add project root to path for import
-            project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-            if project_root not in sys.path:
-                sys.path.insert(0, project_root)
-            from app.core.videosdk_token import get_videosdk_token
-            auth_token = get_videosdk_token()
-        except Exception as e:
-            log.warning(f"Could not use token generator ({e}), falling back to env token")
-            auth_token = os.getenv("VIDEOSDK_AUTH_TOKEN", "")
-
-        if not auth_token:
-            raise ValueError("No VideoSDK auth token available")
-
-        payload = {
-            "sipCallFrom":   caller_id,          # Your Twilio number (+19412072254)
-            "sipCallTo":     phone,               # Candidate's phone number
-            "routingRuleId": routing_rule_id,
-            "agentMetadata": {"session_id": session_id},
-        }
-
-        log.info(f"Dialing {phone} via VideoSDK SIP (routingRule={routing_rule_id})...")
-        log.info(f"  sipCallFrom: {caller_id}")
-        log.info(f"  sipCallTo:   {phone}")
-
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.post(
-                VIDEOSDK_SIP_CALL_URL,
-                json=payload,
-                headers={
-                    "Authorization": auth_token,
-                    "Content-Type":  "application/json",
-                },
-            )
-            log.info(f"SIP API response status: {resp.status_code}")
-            if resp.status_code != 200:
-                log.error(f"SIP API error body: {resp.text}")
-            resp.raise_for_status()
-            result = resp.json()
-            log.info(f"VideoSDK SIP call initiated: {result}")
-            return result
-
-    @http_app.post("/trigger-call")
-    async def trigger_call(request: TriggerCallRequest):
-        """Endpoint called by call_task.py to trigger an outbound interview call."""
-        log.info(f"Received trigger-call: session={request.session_id}, candidate={request.candidate_name}, phone={request.phone}")
-
-        # Auth check
-        if not request.auth_token:
-            log.error("No auth token provided")
-            return {"status": "error", "message": "No auth token in request"}
-
-        if not request.phone:
-            log.error("No phone number provided")
-            return {"status": "error", "message": "No phone number in request"}
-
-        # Store context for when agent joins
-        _pending_sessions[request.session_id] = {
-            "candidate_name": request.candidate_name,
-            "job_title":      request.job_title,
-            "company":        request.company,
-            "jd_summary":     request.jd_summary,
-            "session_id":     request.session_id,
-        }
-
-        try:
-            # THIS is the actual outbound call — dial the candidate's phone
-            sip_result = await _make_outbound_sip_call(
-                phone=request.phone,
-                caller_id=request.caller_id or os.getenv("TWILIO_PHONE_NUMBER", ""),
-                session_id=request.session_id,
-            )
-            log.info(f"Outbound SIP call placed successfully: {sip_result}")
-            return {
-                "status":     "success",
-                "session_id": request.session_id,
-                "message":    f"Outbound call initiated to {request.phone}",
-                "sip":        sip_result,
-            }
-
-        except Exception as e:
-            log.error(f"Failed to initiate SIP call: {e}", exc_info=True)
-            _pending_sessions.pop(request.session_id, None)
-            return {"status": "error", "message": str(e)}
-
-    @http_app.post("/call-connected-webhook")
-    async def call_connected_webhook(call_details: dict):
-        """Webhook called by VideoSDK when the outbound call connects."""
-        log.info(f"Call connected webhook: {call_details}")
-        return {"status": "ok"}
-
-    @http_app.get("/health")
-    async def health():
-        """Health check."""
-        return {
-            "status":           "healthy",
-            "service":          "Hanrry Calling Agent",
-            "pending_sessions": len(_pending_sessions),
-            "routing_rule_set": bool(os.getenv("VIDEOSDK_ROUTING_RULE_ID")),
-        }
 
     # ── Agent entrypoint: called by VideoSDK when call connects ───────────────
     async def _session_entry(context: JobContext):
@@ -492,19 +358,6 @@ if __name__ == "__main__":
         return JobContext(room_options=RoomOptions())
 
     # ── Run Servers ───────────────────────────────────────────────────────────
-    # Python's multiprocessing (used by WorkerJob) MUST run in the main thread.
-    # So we run the FastAPI server in a background thread instead.
-    def _start_api_server():
-        try:
-            log.info("Starting Hanrry Calling Agent HTTP Server on port 8082...")
-            uvicorn.run(http_app, host="0.0.0.0", port=8082, log_level="warning")
-        except Exception:
-            traceback.print_exc()
-
-    api_thread = threading.Thread(target=_start_api_server, daemon=True)
-    api_thread.start()
-    log.info("FastAPI server started in background thread")
-
     # Run agent worker in MAIN thread
     log.info("Starting Hanrry agent worker in main thread...")
     try:
